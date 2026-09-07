@@ -30,12 +30,14 @@ This Terraform module automates the creation and management of Wiz project hiera
 
 ## Directory Structure
 
+```
 your-directory/
 ├── main.tf
 ├── terraform.tfvars.example
 ├── wizcode_project_structure_example.json
 ├── README.md
 └── .gitignore
+```
 
 
 ---
