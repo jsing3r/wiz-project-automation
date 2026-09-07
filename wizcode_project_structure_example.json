@@ -1,0 +1,50 @@
+{
+  "folders": [
+    {
+      "name": "Folder A",
+      "projects": [
+        {
+          "name": "A - First Folder",
+          "repositories": [
+            {
+              "name": "owner/repo1"
+            },
+            {
+              "name": "owner/repo2"
+            }
+          ],
+          "users": [
+            {
+              "email": "owner@company.com",
+              "role": "admin"
+            },
+            {
+              "email": "champion@company.com",
+              "role": "user"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "standalone_projects": [
+    {
+      "name": "Standalone",
+      "repositories": [
+        {
+          "name": "owner/repo3"
+        }
+      ],
+      "users": [
+        {
+          "email": "owner@company.com",
+          "role": "admin"
+        },
+        {
+          "email": "champion@company.com",
+          "role": "user"
+        }
+      ]
+    }
+  ]
+}

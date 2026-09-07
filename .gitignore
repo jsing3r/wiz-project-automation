@@ -1,0 +1,7 @@
+# Terraform credentials, projects and state
+terraform.tfvars
+wizcode_project_structure.json
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl

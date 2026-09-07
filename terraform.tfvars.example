@@ -1,0 +1,4 @@
+wiz_client_id      = "your-client-id-here"
+wiz_client_secret  = "your-client-secret-here"
+json_import_file   = "wizcode_project_structure.json"
+master_folder_name = "Code Orgs"
