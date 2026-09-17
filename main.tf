@@ -148,8 +148,10 @@ locals {
     ]
   }
 
-  # Build email -> Wiz user ID map, null if not found
-  resolved_user_ids = {
+  # Build email -> Wiz user ID map, null if not found. This is the raw
+  # lookup result before filtering out IDs the wiz_project resource can't
+  # accept as project_owners/security_champions (see below).
+  raw_resolved_user_ids = {
     for email in local.all_user_emails :
     email => try(
       [
@@ -159,6 +161,34 @@ locals {
       ][0],
       null
     )
+  }
+
+  # Wiz user IDs accepted by wiz_project.project_owners/security_champions
+  # are standard UUIDs. The wiz_users lookup can also return non-UUID
+  # identifiers for some accounts (e.g. SSO-federated users) that the
+  # wiz_project resource rejects. Rather than blocklisting specific known
+  # formats, validate against the shape a usable ID actually has and treat
+  # anything else as unusable, the same as an unresolved user.
+  is_uuid = { for email, id in local.raw_resolved_user_ids :
+    email => id != null && can(regex(
+      "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      id
+    ))
+  }
+
+  # Emails that resolved to *some* ID, but not one wiz_project will accept.
+  # Kept separately for reporting.
+  unusable_user_ids = {
+    for email, id in local.raw_resolved_user_ids :
+    email => id
+    if id != null && !local.is_uuid[email]
+  }
+
+  # Usable email -> Wiz user ID map: null for both unresolved users and
+  # users that only resolved to an unusable (non-UUID) identifier.
+  resolved_user_ids = {
+    for email, id in local.raw_resolved_user_ids :
+    email => local.is_uuid[email] ? id : null
   }
 }
 
@@ -294,10 +324,25 @@ output "unresolved_repos" {
 }
 
 output "unresolved_users" {
-  description = "User emails that could not be matched to a Wiz user ID"
+  description = "User emails that could not be matched to a Wiz user ID at all"
   value = [
-    for email, id in local.resolved_user_ids :
+    for email, id in local.raw_resolved_user_ids :
     email
     if id == null
   ]
+}
+
+output "resolved_user_ids" {
+  description = "Email -> Wiz user ID map actually used for project_owners/security_champions (null for unresolved users and users whose resolved ID isn't a usable UUID)"
+  value       = local.resolved_user_ids
+}
+
+output "raw_resolved_user_ids" {
+  description = "Every user email in the input alongside the raw ID Wiz returned for it (null if unresolved) — for debugging what Wiz's user lookup actually returns"
+  value       = local.raw_resolved_user_ids
+}
+
+output "unusable_user_ids" {
+  description = "User emails that resolved to an ID Wiz returned but wiz_project won't accept as a project_owners/security_champions value (not a UUID), and were skipped as a result"
+  value       = local.unusable_user_ids
 }
