@@ -1,0 +1,19 @@
+{
+  "folders": [
+    {
+      "name": "TestFolder",
+      "projects": [
+        {
+          "name": "test-project",
+          "repositories": [],
+          "users": [
+            { "email": "good@example.com", "role": "admin" },
+            { "email": "badformat@example.com", "role": "admin" },
+            { "email": "missing@example.com", "role": "user" }
+          ]
+        }
+      ]
+    }
+  ],
+  "standalone_projects": []
+}
