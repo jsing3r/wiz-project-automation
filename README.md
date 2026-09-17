@@ -12,6 +12,7 @@ This Terraform module automates the creation and management of Wiz project hiera
 - Links VCS repositories to projects using exact path matching
 - Assigns users to projects based on role (`admin` → project owner, `user` → security champion)
 - Skips users that haven't logged into Wiz via SAML yet - no errors, just skipped
+- Skips users that resolve to an ID Wiz won't accept as a project owner/security champion (e.g. certain SSO-federated accounts) - no errors, just skipped
 - Outputs unresolved repositories and users after each apply
 
 ---
@@ -35,6 +36,10 @@ your-directory/
 ├── main.tf
 ├── terraform.tfvars.example
 ├── wizcode_project_structure_example.json
+├── tests/
+│   ├── user_id_resolution.tftest.hcl
+│   └── fixtures/
+│       └── test_import.json
 ├── README.md
 └── .gitignore
 ```
@@ -102,6 +107,7 @@ Check the output for:
 - Folders and projects that will be created
 - `unresolved_repos` — repositories that could not be matched in Wiz
 - `unresolved_users` — users that haven't logged into Wiz via SAML yet
+- `unusable_user_ids` — users that resolved to an ID Wiz won't accept as an owner/champion (see [Known Limitations](#saml-users))
 
 ### 6. Apply
 
@@ -198,7 +204,10 @@ Repositories that cannot be matched are skipped and reported in the `unresolved_
 | `category_folder_ids` | Map of category folder names to Wiz IDs |
 | `project_ids` | Map of project keys to Wiz IDs |
 | `unresolved_repos` | Repository names that could not be matched to a Wiz asset ID |
-| `unresolved_users` | User emails that could not be matched to a Wiz user ID |
+| `unresolved_users` | User emails that could not be matched to a Wiz user ID at all |
+| `unusable_user_ids` | User emails that matched a Wiz user, but to an ID `wiz_project` won't accept (not a UUID) — see [SAML users](#saml-users) |
+| `resolved_user_ids` | Email → Wiz user ID actually used for `project_owners`/`security_champions` (`null` if unresolved or unusable) |
+| `raw_resolved_user_ids` | Email → whatever ID the `wiz_users` lookup returned, unfiltered — useful for debugging |
 
 ---
 
@@ -246,7 +255,47 @@ The Wiz Terraform provider does not expose a direct data source for resolving re
 
 ### SAML users
 
-Users are looked up via the `wiz_users` data source. Users who have not yet logged into Wiz via SAML will not be found and will be silently skipped. Re-run `terraform apply` after users have logged in to assign them to their projects.
+Users are looked up via the `wiz_users` data source. This can fail to produce a usable owner/champion in two different ways, reported separately so you can tell which one you're dealing with:
+
+- **Not found at all** (`unresolved_users`) — most commonly because the user hasn't logged into Wiz via SAML yet. Re-run `terraform apply` after they've logged in.
+- **Found, but unusable** (`unusable_user_ids`) — the lookup returns *some* ID, but not one `wiz_project` accepts for `project_owners`/`security_champions` (seen with some SSO-federated accounts, which resolve to a non-UUID identifier). There's no user action that fixes this from the JSON side; it reflects how that account is provisioned in Wiz.
+
+Either way, the user is silently skipped for that project rather than failing the apply — check `unresolved_users` and `unusable_user_ids` after each run to see who was left out and why.
+
+---
+
+## Testing
+
+`tests/user_id_resolution.tftest.hcl` unit-tests the user ID resolution logic (the `resolved_user_ids` / `unusable_user_ids` / `unresolved_users` split above) using Terraform's native test framework, `terraform test` (Terraform >= 1.7).
+
+It mocks the `wiz` provider entirely (`mock_provider "wiz" {}`), so it makes no real API calls and needs no real credentials — this is what lets it exercise cases, like a non-UUID user ID, that may not currently exist to reproduce against your actual Wiz tenant.
+
+Run it with:
+
+```bash
+terraform test
+```
+
+### How it works
+
+The test points `json_import_file` at a small fixture, `tests/fixtures/test_import.json`, containing one project with three users:
+
+| Email | Role | What it's testing |
+|---|---|---|
+| `good@example.com` | admin | A normal, resolvable user with a valid UUID |
+| `badformat@example.com` | admin | A user that resolves, but to a non-UUID ID |
+| `missing@example.com` | user | A user that doesn't resolve at all |
+
+`override_data` blocks fake what `data.wiz_users.lookup` returns for each of those three emails — including a non-UUID ID shaped like the ones Wiz has actually returned in practice (an opaque `bd-sso_...` string, not tied to the email) rather than a made-up placeholder.
+
+The test then asserts, end to end:
+- the valid UUID survives into `resolved_user_ids` and into the leaf project's `project_owners`
+- the non-UUID ID and the fully-unresolved email both end up `null` in `resolved_user_ids`, and are dropped from `project_owners`
+- `unusable_user_ids` and `unresolved_users` correctly separate the two failure modes described above
+
+### Adding more cases
+
+To test another scenario (a different malformed ID shape, a user with multiple `wiz_users` matches, etc.), add another entry to `tests/fixtures/test_import.json`, add a matching `override_data` block in `tests/user_id_resolution.tftest.hcl`, and add assertions for the expected outcome.
 
 ---
 
@@ -268,7 +317,7 @@ Your client ID or secret is invalid or has been rotated. Generate new credential
 ```bash
    python3 -c "import json; json.load(open('wizcode_project_structure.json')); print('Valid JSON')"
 ```
-4. Run `terraform console` and check `local.resolved_user_ids` to verify which users resolved successfully
+4. Run `terraform console` and check `local.resolved_user_ids` to verify which users resolved successfully, or check the `unusable_user_ids` output if a user resolves but still doesn't get assigned
 5. Re-run `terraform apply` to pick up newly provisioned users
 
 ### Repositories showing in `unresolved_repos`
