@@ -1,13 +1,24 @@
 # Run with: terraform test
 #
 # This mocks the wiz provider entirely, so it makes no real API calls and
-# needs no real credentials. It injects three cases into the user lookup
-# that you can't currently reproduce against your real tenant:
-#   - good@example.com       -> a valid UUID (should be usable)
-#   - badformat@example.com  -> resolves to a non-UUID ID, like the
-#                                xx-sso_* case (should be filtered out)
-#   - missing@example.com    -> resolves to no user at all (should be
-#                                filtered out, and reported separately)
+# needs no real credentials.
+#
+# Earlier versions of this test asserted that a non-UUID resolved ID got
+# filtered out of project_owners/security_champions. That assumption was
+# disproven against a real Wiz tenant: Wiz's own UI assigns project
+# ownership using exactly this non-UUID, idp-prefixed shape for SSO/SAML
+# users (e.g. "comp-okta_<email>"), so ID shape is not a valid signal of
+# usability. main.tf no longer filters by shape - the only thing that
+# gets an email dropped from project_owners/security_champions is the
+# wiz_users lookup finding no match at all.
+#
+# This test now covers:
+#   - good@example.com    -> a UUID-shaped ID (should be usable)
+#   - sso@example.com     -> a non-UUID, idp-prefixed ID, the same shape
+#                            Wiz itself uses for SSO users (should ALSO
+#                            be usable - this is the regression case)
+#   - missing@example.com -> resolves to no user at all (should be the
+#                            only one filtered out)
 
 mock_provider "wiz" {}
 
@@ -30,10 +41,10 @@ run "user_id_resolution" {
   }
 
   override_data {
-    target = data.wiz_users.lookup["badformat@example.com"]
+    target = data.wiz_users.lookup["sso@example.com"]
     values = {
       wiz_users = [
-        { id = "xx-sso_jkldfgjioeruiertdrnfgierjtioerjriogjdriog", email = "badformat@example.com" }
+        { id = "comp-okta_sso@example.com", email = "sso@example.com" }
       ]
     }
   }
@@ -45,46 +56,46 @@ run "user_id_resolution" {
     }
   }
 
-  # --- resolved_user_ids: only the valid UUID survives ---
+  # --- resolved_user_ids: any resolved ID is kept, regardless of shape ---
   assert {
     condition     = output.resolved_user_ids["good@example.com"] == "d290f1ee-6c54-4b01-90e6-d701748f0851"
-    error_message = "A valid UUID should be kept in resolved_user_ids"
+    error_message = "A UUID-shaped ID should be kept in resolved_user_ids"
   }
 
   assert {
-    condition     = output.resolved_user_ids["badformat@example.com"] == null
-    error_message = "A non-UUID ID should be filtered out of resolved_user_ids"
+    condition     = output.resolved_user_ids["sso@example.com"] == "comp-okta_sso@example.com"
+    error_message = "A non-UUID, idp-prefixed ID should ALSO be kept in resolved_user_ids - this is the real shape Wiz uses for SSO users"
   }
 
   assert {
     condition     = output.resolved_user_ids["missing@example.com"] == null
-    error_message = "An unresolved user should be null in resolved_user_ids"
+    error_message = "Only a fully-unresolved user should be null in resolved_user_ids"
   }
 
-  # --- reporting outputs distinguish the two failure modes ---
-  assert {
-    condition     = output.unusable_user_ids["badformat@example.com"] == "xx-sso_jkldfgjioeruiertdrnfgierjtioerjriogjdriog"
-    error_message = "unusable_user_ids should report the raw non-UUID ID that got filtered"
-  }
-
+  # --- unresolved_users only reports the genuinely-unmatched email ---
   assert {
     condition     = contains(output.unresolved_users, "missing@example.com")
     error_message = "unresolved_users should list the email that returned no user at all"
   }
 
   assert {
-    condition     = !contains(output.unresolved_users, "badformat@example.com")
-    error_message = "unresolved_users should NOT include an email that resolved, just unusably"
+    condition     = !contains(output.unresolved_users, "sso@example.com")
+    error_message = "unresolved_users should NOT include an email that resolved, even to a non-UUID ID"
   }
 
-  # --- end-to-end: the leaf project only ends up with the usable owner ---
+  # --- end-to-end: both resolvable owners make it into project_owners ---
   assert {
     condition     = contains(wiz_project.projects["TestFolder/test-project"].project_owners, "d290f1ee-6c54-4b01-90e6-d701748f0851")
-    error_message = "The good user's UUID should end up in project_owners"
+    error_message = "The UUID-shaped owner should end up in project_owners"
   }
 
   assert {
-    condition     = length(wiz_project.projects["TestFolder/test-project"].project_owners) == 1
-    error_message = "Only the one usable owner should survive filtering (badformat's admin role should be dropped)"
+    condition     = contains(wiz_project.projects["TestFolder/test-project"].project_owners, "comp-okta_sso@example.com")
+    error_message = "The non-UUID SSO owner should ALSO end up in project_owners"
+  }
+
+  assert {
+    condition     = length(wiz_project.projects["TestFolder/test-project"].project_owners) == 2
+    error_message = "Both admin-role users should survive - only the fully-unresolved user should be dropped"
   }
 }

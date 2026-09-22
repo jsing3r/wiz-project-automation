@@ -8,7 +8,7 @@
           "repositories": [],
           "users": [
             { "email": "good@example.com", "role": "admin" },
-            { "email": "badformat@example.com", "role": "admin" },
+            { "email": "sso@example.com", "role": "admin" },
             { "email": "missing@example.com", "role": "user" }
           ]
         }

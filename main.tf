@@ -163,33 +163,15 @@ locals {
     )
   }
 
-  # Wiz user IDs accepted by wiz_project.project_owners/security_champions
-  # are standard UUIDs. The wiz_users lookup can also return non-UUID
-  # identifiers for some accounts (e.g. SSO-federated users) that the
-  # wiz_project resource rejects. Rather than blocklisting specific known
-  # formats, validate against the shape a usable ID actually has and treat
-  # anything else as unusable, the same as an unresolved user.
-  is_uuid = { for email, id in local.raw_resolved_user_ids :
-    email => id != null && can(regex(
-      "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-      id
-    ))
-  }
-
-  # Emails that resolved to *some* ID, but not one wiz_project will accept.
-  # Kept separately for reporting.
-  unusable_user_ids = {
-    for email, id in local.raw_resolved_user_ids :
-    email => id
-    if id != null && !local.is_uuid[email]
-  }
-
-  # Usable email -> Wiz user ID map: null for both unresolved users and
-  # users that only resolved to an unusable (non-UUID) identifier.
-  resolved_user_ids = {
-    for email, id in local.raw_resolved_user_ids :
-    email => local.is_uuid[email] ? id : null
-  }
+  # NOTE: an earlier version of this file filtered resolved IDs by UUID
+  # shape, based on a report that a "xx-sso_*"-formatted ID got rejected
+  # by wiz_project. That turned out to be a false generalization: real
+  # production testing confirmed Wiz's own UI assigns project owners using
+  # exactly this non-UUID, idp-prefixed ID shape (e.g.
+  # "comp-okta_<email>") for SAML/SSO-authenticated users, so ID *shape*
+  # is not a reliable signal of validity either way. The only thing we
+  # actually know is whether the wiz_users lookup found a match at all.
+  resolved_user_ids = local.raw_resolved_user_ids
 }
 
 # ------------------------------------------------------------------------------
@@ -216,6 +198,7 @@ data "wiz_users" "lookup" {
 
 resource "wiz_project" "master_folder" {
   name        = var.master_folder_name
+  slug        = uuidv5("dns", "wiz-tf-master-folder-${var.master_folder_name}")
   description = "Configured via Terraform automation"
   is_folder   = true
 
@@ -223,6 +206,12 @@ resource "wiz_project" "master_folder" {
     key   = "managed_by"
     value = var.managed_by_tag
   }
+
+  # Uncomment if you want to guarantee `terraform destroy` can never remove
+  # the root of your whole hierarchy, even by accident:
+  # lifecycle {
+  #   prevent_destroy = true
+  # }
 }
 
 # ------------------------------------------------------------------------------
@@ -233,6 +222,7 @@ resource "wiz_project" "category_folders" {
   for_each = local.folders
 
   name              = each.key
+  slug              = uuidv5("dns", "wiz-tf-category-folder-${each.key}")
   description       = "Category folder created via Terraform automation"
   is_folder         = true
   parent_project_id = wiz_project.master_folder.id
@@ -251,6 +241,7 @@ resource "wiz_project" "projects" {
   for_each = local.all_projects
 
   name        = each.value.project_name
+  slug        = uuidv5("dns", "wiz-tf-project-${each.key}")
   description = "Configured via Terraform automation"
   is_folder   = false
 
@@ -310,7 +301,7 @@ output "category_folder_ids" {
 }
 
 output "project_ids" {
-  description = "IDs of all created projects"
+  description = "IDs of all projects"
   value       = { for k, v in wiz_project.projects : k => v.id }
 }
 
@@ -333,16 +324,11 @@ output "unresolved_users" {
 }
 
 output "resolved_user_ids" {
-  description = "Email -> Wiz user ID map actually used for project_owners/security_champions (null for unresolved users and users whose resolved ID isn't a usable UUID)"
+  description = "Email -> Wiz user ID map used for project_owners/security_champions (null only for emails the wiz_users lookup couldn't match at all)"
   value       = local.resolved_user_ids
 }
 
 output "raw_resolved_user_ids" {
-  description = "Every user email in the input alongside the raw ID Wiz returned for it (null if unresolved) — for debugging what Wiz's user lookup actually returns"
+  description = "Every user email in the input alongside the raw ID Wiz returned for it (null if unresolved) — for debugging what Wiz's user lookup actually returns. Currently identical to resolved_user_ids; kept as a separate output in case ID filtering is reintroduced later"
   value       = local.raw_resolved_user_ids
-}
-
-output "unusable_user_ids" {
-  description = "User emails that resolved to an ID Wiz returned but wiz_project won't accept as a project_owners/security_champions value (not a UUID), and were skipped as a result"
-  value       = local.unusable_user_ids
 }
