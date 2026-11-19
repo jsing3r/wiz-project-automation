@@ -47,6 +47,12 @@ variable "managed_by_tag" {
   default     = "json-import-script"
 }
 
+variable "preserve_unlisted_repo_links" {
+  description = "Keep repository links that exist on a project in Wiz but aren't listed in the JSON (e.g. added manually in the Wiz UI). Set to false to make the JSON the exact source of truth and remove unlisted links."
+  type        = bool
+  default     = true
+}
+
 # ------------------------------------------------------------------------------
 # Locals
 # ------------------------------------------------------------------------------
@@ -125,6 +131,42 @@ locals {
     )
   }
 
+  # Per-project repo asset IDs requested by the JSON (unresolved names dropped)
+  json_repo_ids = {
+    for k, p in local.all_projects : k => [
+      for repo_name in p.repositories :
+      local.resolved_repo_ids[repo_name]
+      if lookup(local.resolved_repo_ids, repo_name, null) != null
+    ]
+  }
+
+  # Per-project repo asset IDs currently linked in Wiz, read from the live
+  # project. Empty for projects that don't exist yet. The exact name match
+  # is required because wiz_projects `search` is a fuzzy match.
+  live_repo_ids = {
+    for k, p in local.all_projects : k => try(distinct(flatten([
+      for proj in data.wiz_projects.existing[k].projects : [
+        for l in proj.repository_links : l.repository
+      ]
+      if proj.name == p.project_name
+    ])), [])
+  }
+
+  # Links in Wiz that the JSON doesn't list (manually added, or removed
+  # from the JSON since the last apply)
+  unlisted_repo_ids = {
+    for k, ids in local.live_repo_ids : k => tolist(setsubtract(ids, local.json_repo_ids[k]))
+  }
+
+  # What actually gets applied: JSON links, plus unlisted live links when
+  # preserve_unlisted_repo_links is on
+  desired_repo_ids = {
+    for k, _ in local.all_projects : k => distinct(concat(
+      local.json_repo_ids[k],
+      var.preserve_unlisted_repo_links ? local.unlisted_repo_ids[k] : []
+    ))
+  }
+
   # All unique user emails across all projects
   all_user_emails = distinct(flatten([
     for p in local.all_projects : [
@@ -181,6 +223,22 @@ locals {
 data "wiz_repositories" "lookup" {
   for_each = local.repo_search_map
   search   = [each.value.short_name]
+}
+
+# ------------------------------------------------------------------------------
+# Data Sources - Existing Projects (live repository links)
+# ------------------------------------------------------------------------------
+
+# Reads each leaf project's current state from Wiz so repository links added
+# outside Terraform can be preserved. Looked up by name rather than by
+# wiz_project.projects[...].id, which would create a dependency cycle.
+#
+# This only feeds repository link IDs into resources Terraform already
+# manages. It does NOT decide which projects exist, so it doesn't reintroduce
+# the "adopt existing project by lookup" problem described in the README.
+data "wiz_projects" "existing" {
+  for_each = local.all_projects
+  search   = each.value.project_name
 }
 
 # ------------------------------------------------------------------------------
@@ -260,12 +318,10 @@ resource "wiz_project" "projects" {
     business_impact = "MBI"
   }
 
+  # JSON links, plus any links already in Wiz that the JSON doesn't list
+  # (see preserve_unlisted_repo_links)
   dynamic "repository_links" {
-    for_each = [
-      for repo_name in each.value.repositories :
-      local.resolved_repo_ids[repo_name]
-      if lookup(local.resolved_repo_ids, repo_name, null) != null
-    ]
+    for_each = local.desired_repo_ids[each.key]
     content {
       repository = repository_links.value
     }
@@ -312,6 +368,11 @@ output "unresolved_repos" {
     repo_name
     if asset_id == null
   ]
+}
+
+output "unlisted_repo_links" {
+  description = "Per project: repository asset IDs linked in Wiz but not listed in the JSON. Kept when preserve_unlisted_repo_links = true, removed when false"
+  value       = { for k, ids in local.unlisted_repo_ids : k => ids if length(ids) > 0 }
 }
 
 output "unresolved_users" {

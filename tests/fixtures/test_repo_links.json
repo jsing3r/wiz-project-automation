@@ -1,0 +1,17 @@
+{
+  "folders": [
+    {
+      "name": "TestFolder",
+      "projects": [
+        {
+          "name": "repo-project",
+          "repositories": [
+            { "name": "owner/listed" }
+          ],
+          "users": []
+        }
+      ]
+    }
+  ],
+  "standalone_projects": []
+}
