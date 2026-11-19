@@ -10,6 +10,7 @@ This Terraform module automates the creation and management of Wiz project hiera
 - Creates category sub-folders (e.g. `App1`, `App2`, `App3`)
 - Creates leaf projects under their correct parent folders
 - Links VCS repositories to projects using exact path matching
+- Preserves repository links added manually in Wiz that aren't in the JSON (configurable)
 - Assigns users to projects based on role (`admin` → project owner, `user` → security champion)
 - Skips users that haven't logged into Wiz yet - no errors, just skipped
 - Outputs unresolved repositories and users after each apply
@@ -37,8 +38,10 @@ your-directory/
 ├── wizcode_project_structure_example.json
 ├── tests/
 │   ├── user_id_resolution.tftest.hcl
+│   ├── repo_link_preservation.tftest.hcl
 │   └── fixtures/
-│       └── test_import.json
+│       ├── test_import.json
+│       └── test_repo_links.json
 ├── README.md
 └── .gitignore
 ```
@@ -191,6 +194,7 @@ Repositories that cannot be matched are skipped and reported in the `unresolved_
 | `json_import_file` | `wiz_import.json` | Path to the JSON input file |
 | `master_folder_name` | `Code Orgs` | Name of the root master folder |
 | `managed_by_tag` | `json-import-script` | Tag value applied to all created resources |
+| `preserve_unlisted_repo_links` | `true` | Keep repo links that exist on a project in Wiz but aren't in the JSON. Set `false` to make the JSON the exact source of truth |
 
 ---
 
@@ -202,6 +206,7 @@ Repositories that cannot be matched are skipped and reported in the `unresolved_
 | `category_folder_ids` | Map of category folder names to Wiz IDs |
 | `project_ids` | Map of project keys to Wiz IDs |
 | `unresolved_repos` | Repository names that could not be matched to a Wiz asset ID |
+| `unlisted_repo_links` | Per project, repo asset IDs linked in Wiz but not in the JSON (kept or removed depending on `preserve_unlisted_repo_links`) |
 | `unresolved_users` | User emails that could not be matched to a Wiz user ID at all |
 | `resolved_user_ids` | Email → Wiz user ID used for `project_owners`/`security_champions` (`null` only if the email couldn't be matched to a Wiz user at all) |
 | `raw_resolved_user_ids` | Same as `resolved_user_ids` — kept as a separate output for debugging in case ID filtering is reintroduced later |
@@ -232,7 +237,15 @@ Newly provisioned users will automatically be assigned to their projects.
 
 ### Updating repository links
 
-Update the `repositories` list for a project in the JSON and run `terraform apply`. Terraform will reconcile the repository links.
+Add a repository to a project's `repositories` list in the JSON and run `terraform apply` to link it.
+
+By default (`preserve_unlisted_repo_links = true`) the JSON is **additive** for repository links. Before each plan, the module reads each project's current links from Wiz and keeps any the JSON doesn't list, so repos someone linked manually in the Wiz UI aren't removed. Check the `unlisted_repo_links` output to see which links that applies to.
+
+Because of this, **removing a repo from the JSON doesn't unlink it**: Terraform can't tell a repo you removed from the JSON apart from one added manually. To unlink a repo, either:
+- remove the link in the Wiz UI, or
+- run one apply with `terraform apply -var preserve_unlisted_repo_links=false`. **This removes every unlisted link on every project, manual ones included.** Review `unlisted_repo_links` in the plan before applying.
+
+Set `preserve_unlisted_repo_links = false` in `terraform.tfvars` to make the JSON the exact source of truth permanently.
 
 ### Removing a project
 
@@ -265,6 +278,8 @@ If you want to guarantee `terraform destroy` can never remove your root folder e
 ### Repository linking
 
 The Wiz Terraform provider does not expose a direct data source for resolving repository asset IDs by exact path. This module uses the `wiz_repositories` data source with a short-name search and applies exact matching logic in locals to resolve the correct asset ID.
+
+To preserve manually added links, the module also queries the `wiz_projects` data source by project name (exact-matched in locals, because `search` is fuzzy) and reads `projects[].repository_links[].repository`. The lookup uses the name rather than the project resource's ID because the ID would create a dependency cycle. It only supplies link IDs to projects Terraform already manages, so it doesn't bring back the "adopt existing projects by lookup" problem described under [Project name uniqueness](#project-name-uniqueness). Only the repository ID is carried over for a preserved link. If links have other settings in Wiz (such as branch filters), those aren't copied.
 
 ### SAML/SSO users
 
@@ -305,6 +320,14 @@ The test then asserts, end to end:
 - only the fully-unresolved `missing@example.com` ends up `null` in `resolved_user_ids` and appears in `unresolved_users`
 
 This test exists specifically to guard against reintroducing ID-shape filtering by mistake — a prior version of this module did, and it silently dropped valid SSO users from `project_owners`.
+
+### Repository link preservation
+
+`tests/repo_link_preservation.tftest.hcl` uses `tests/fixtures/test_repo_links.json` (one project listing `owner/listed`). It fakes Wiz returning that project with one listed link and one manual link, plus a second, similarly named project. It asserts that:
+- with the default `preserve_unlisted_repo_links = true`, the manual link is kept, with no duplicates and no links from the other project
+- with `preserve_unlisted_repo_links = false`, only the JSON link remains
+
+Its `override_data` blocks also check the assumed attribute names of the `wiz_projects` data source. If the real provider schema differs, the test fails.
 
 ### Adding more cases
 

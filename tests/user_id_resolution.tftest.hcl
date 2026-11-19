@@ -31,6 +31,14 @@ variables {
 run "user_id_resolution" {
   command = plan
 
+  # The project doesn't exist in Wiz yet, so there are no live repo links
+  override_data {
+    target = data.wiz_projects.existing["TestFolder/test-project"]
+    values = {
+      projects = []
+    }
+  }
+
   override_data {
     target = data.wiz_users.lookup["good@example.com"]
     values = {
