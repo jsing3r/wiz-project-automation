@@ -85,7 +85,7 @@ run "preserve_unlisted_links_by_default" {
   }
 
   assert {
-    condition     = output.unlisted_repo_links["TestFolder/repo-project"] == ["repo-manual"]
+    condition     = output.unlisted_repo_links["TestFolder/repo-project"] == tolist(["repo-manual"])
     error_message = "unlisted_repo_links should report the manually added link"
   }
 }
@@ -111,7 +111,7 @@ run "json_is_source_of_truth_when_disabled" {
   }
 
   assert {
-    condition     = output.unlisted_repo_links["TestFolder/repo-project"] == ["repo-manual"]
+    condition     = output.unlisted_repo_links["TestFolder/repo-project"] == tolist(["repo-manual"])
     error_message = "unlisted_repo_links should still report what is being removed"
   }
 }
